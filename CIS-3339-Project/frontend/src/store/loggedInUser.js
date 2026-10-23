@@ -18,6 +18,7 @@ function decodeValidToken(token) {
   }
 }
 
+
 export const useLoggedInUserStore = defineStore({
   id: 'loggedInUser',
   state: () => ({
