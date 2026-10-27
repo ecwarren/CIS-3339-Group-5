@@ -13,6 +13,7 @@
         <!-- Displays Service Name and Description selection -->
         <div class="flex flex-col">
           <select
+            aria-label="Search by"
             class="rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
             v-model="searchBy">
             <option value="Service Name">Service Name</option>
@@ -61,101 +62,76 @@
         <h3 class="italic">Click table row to view service details</h3>
       </div>
       <div class="flex flex-col col-span-2">
-        <table class="min-w-full shadow-md rounded">
-          <thead class="bg-gray-50 text-xl">
-            <tr>
-              <th class="p-4 text-left" style="width: 25%;">Service Name</th>
-              <th class="p-4 text-left" style="width: 75%;">Service Description</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-300">
-            <tr @click="$router.push({name: 'servicedetails', params: { id: service._id } })" 
-            v-for="service in services" :key="service._id" class="cursor-pointer"
-              :class="{ 'hoverRow': hoverId === service._id }" @mouseenter="hoverId = service._id"
-              @mouseleave="hoverId = null">
-              <td class="p-4 text-left">{{ service.name }}</td>
-              <td class="p-4 text-left text-sm">{{ service.description }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <!-- Loading state -->
+        <div v-if="loading" class="p-6 text-center text-xl text-gray-500 animate-pulse">
+          Loading services...
+        </div>
+        <!-- Error state with retry -->
+        <div v-else-if="error" class="p-4 rounded border border-red-300 bg-red-50" role="alert">
+          <p class="font-bold text-red-800">Could not load services</p>
+          <p class="text-red-900">{{ error }}</p>
+          <button class="mt-3 bg-red-700 text-white rounded" @click="execute()">Retry</button>
+        </div>
+        <!-- Data (DataTable shows the empty-results row itself) -->
+        <DataTable
+          v-else
+          :columns="columns"
+          :rows="rows"
+          empty-text="No services found. Try a different search or click Clear Search."
+          @row-click="openDetails"
+        />
       </div>
     </div>
   </main>
 </template>
 
-<script>
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import DataTable from '../components/DataTable.vue'
+import { useApi } from '../composables/useApi'
 import { getServices, searchServices } from '../api/api'
-import { useToast } from 'vue-toastification'
 
-//Notifications
-const toast = useToast()
+const router = useRouter()
 
-export default {
-  data() {
-    return {
-      //variable to hold the services for the organization
-      services: null,
-      // Parameters for search to occur
-      searchBy: null,
-      name: null,
-      description: null,
-      // variable stores the ID of the row that the mouse is currently hovering over (to highlight the row red)
-      hoverId: null,
-    }
-  },
-  mounted() {
-    // when component is mounted, load the data
-    this.loadData();
-  },
-  methods: {
-    // method called when component is mounted
-    async loadData() {
-      // Resets all the variables
-      this.searchBy = ''
-      this.name = ''
-      this.description = ''
+// search inputs
+const searchBy = ref('')
+const name = ref('')
+const description = ref('')
 
-      // get list of services
-      try {
-        const response = await getServices();
-        this.services = response;
-      } catch (error) {
-        toast.error(error)
-      }
-    },
+const activeQuery = ref(null)
+const { data, loading, error, execute } = useApi(() =>
+  activeQuery.value ? searchServices(activeQuery.value) : getServices()
+)
+const rows = computed(() => data.value || [])
 
-    // method called when user searches for a service
-    async handleSubmitForm() {
-      // if user searches by service name
-      if (this.searchBy === 'Service Name') {
-        if (this.name) {
-          try {
-            const query = {
-              searchBy: 'name',
-              name: this.name
-            }
-            const response = await searchServices(query)
-            this.services = response;
-          } catch (error) {
-            toast.error(error)
-          }
-        }
-        // if user searches by service description
-      } else if (this.searchBy === 'Service Description') {
-        if (this.description) {
-          try {
-            const query = {
-              searchBy: 'description',
-              description: this.description
-            }
-            const response = await searchServices(query)
-            this.services = response;
-          } catch (error) {
-            toast.error('Error searching services:', error)
-          }
-        }
-      }
-    },
-  },
+const columns = [
+  { label: 'Service Name', field: 'name' },
+  { label: 'Service Description', field: 'description' }
+]
+
+function openDetails(service) {
+  router.push({ name: 'servicedetails', params: { id: service._id } })
 }
+
+function loadData() {
+  searchBy.value = ''
+  name.value = ''
+  description.value = ''
+  activeQuery.value = null
+  execute()
+}
+
+function handleSubmitForm() {
+  if (searchBy.value === 'Service Name' && name.value) {
+    activeQuery.value = { searchBy: 'name', name: name.value }
+  } else if (searchBy.value === 'Service Description' && description.value) {
+    activeQuery.value = { searchBy: 'description', description: description.value }
+  } else {
+    return
+  }
+  execute()
+}
+
+onMounted(loadData)
 </script>
