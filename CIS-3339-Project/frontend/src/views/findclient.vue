@@ -14,6 +14,7 @@
         <!-- Displays Client Name search field -->
         <div class="flex flex-col">
           <select
+            aria-label="Search by"
             class="rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
             v-model="searchBy">
             <option value="Client Name">Client Name</option>
@@ -68,108 +69,86 @@
       </div>
       <!--Table showing list of Clients-->
       <div class="flex flex-col col-span-2">
-        <table class="min-w-full shadow-md rounded">
-          <thead class="bg-gray-50 text-xl">
-            <tr>
-              <th class="p-4 text-left">Name</th>
-              <th class="p-4 text-left">Phone number</th>
-              <th class="p-4 text-left">City</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-300">
-            <tr @click="$router.push({ name: 'clientdetails', params: { id: client._id } })" v-for="client in clients"
-              :key="client._id" class="cursor-pointer" :class="{ 'hoverRow': hoverId === client._id }"
-              @mouseenter="hoverId = client._id" @mouseleave="hoverId = null">
-              <td class="p-2 text-left">
-                {{ client.firstName + ' ' + client.lastName }}
-              </td>
-              <td class="p-2 text-left">
-                {{ client.phoneNumber.primary }}
-              </td>
-              <td class="p-2 text-left">{{ client.address.city }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <!-- Loading state -->
+        <div v-if="loading" class="p-6 text-center text-xl text-gray-500 animate-pulse">
+          Loading clients...
+        </div>
+        <!-- Error state with retry -->
+        <div v-else-if="error" class="p-4 rounded border border-red-300 bg-red-50" role="alert">
+          <p class="font-bold text-red-800">Could not load clients</p>
+          <p class="text-red-900">{{ error }}</p>
+          <button class="mt-3 bg-red-700 text-white rounded" @click="execute()">Retry</button>
+        </div>
+        <!-- Data (DataTable shows the empty-results row itself) -->
+        <DataTable
+          v-else
+          :columns="columns"
+          :rows="rows"
+          empty-text="No clients found. Try a different search or click Clear Search."
+          @row-click="openDetails"
+        />
       </div>
     </div>
   </main>
 </template>
 
-<script>
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import DataTable from '../components/DataTable.vue'
+import { useApi } from '../composables/useApi'
 import { getClients, searchClients } from '../api/api'
-import { useToast } from 'vue-toastification'
 
-//Notifications
-const toast = useToast()
+const router = useRouter()
 
-export default {
-  data() {
-    return {
-      //variable to store all clients and their information for the organization
-      clients: null,
-      // Parameters for search to occur
-      searchBy: '',
-      firstName: '',
-      lastName: '',
-      phoneNumber: '',
-      // variable stores the ID of the row that the mouse is currently hovering over (to highlight the row red)
-      hoverId: null,
-    }
-  },
-  mounted() {
-    // when component is mounted, load the data -
-    this.loadData()
-  },
-  methods: {
-    // method called when component is mounted
-    async loadData() {
-      // Resets all the variables
-      this.searchBy = ''
-      this.firstName = ''
-      this.lastName = ''
-      this.phoneNumber = ''
+// search inputs
+const searchBy = ref('')
+const firstName = ref('')
+const lastName = ref('')
+const phoneNumber = ref('')
 
-      // get list of clients
-      try {
-        const response = await getClients();
-        this.clients = response;
-      } catch (error) {
-        toast.error(error)
-      }
-    },
-    // method called when user searches for clients
-    async handleSubmitForm() {
-      // if user searched by client name
-      if (this.searchBy === 'Client Name') {
-        if (this.firstName || this.lastName) {
-          try {
-            const query = {
-              searchBy: 'name',
-              firstName: this.firstName,
-              lastName: this.lastName,
-            }
-            const response = await searchClients(query)
-            this.clients = response;
-          } catch (error) {
-            toast.error(error)
-          }
-        }
-        // if user searches by client phone number
-      } else if (this.searchBy === 'Client Number') {
-        if (this.phoneNumber) {
-          try {
-            const query = {
-              searchBy: 'number',
-              phoneNumber: this.phoneNumber
-            }
-            const response = await searchClients(query)
-            this.clients = response;
-          } catch (error) {
-            toast.error(error)
-          }
-        }
-      }
-    },
-  },
+// null = show all clients, otherwise the last search that was run.
+// Retry re-runs whichever one failed.
+const activeQuery = ref(null)
+const { data, loading, error, execute } = useApi(() =>
+  activeQuery.value ? searchClients(activeQuery.value) : getClients()
+)
+const rows = computed(() => data.value || [])
+
+const columns = [
+  { label: 'Name', field: 'lastName', render: (c) => `${c.firstName} ${c.lastName}` },
+  { label: 'Phone number', field: 'phoneNumber.primary' },
+  { label: 'City', field: 'address.city' }
+]
+
+function openDetails(client) {
+  router.push({ name: 'clientdetails', params: { id: client._id } })
 }
+
+// "Clear Search": reset inputs and show every client
+function loadData() {
+  searchBy.value = ''
+  firstName.value = ''
+  lastName.value = ''
+  phoneNumber.value = ''
+  activeQuery.value = null
+  execute()
+}
+
+function handleSubmitForm() {
+  if (searchBy.value === 'Client Name' && (firstName.value || lastName.value)) {
+    activeQuery.value = {
+      searchBy: 'name',
+      firstName: firstName.value,
+      lastName: lastName.value
+    }
+  } else if (searchBy.value === 'Client Number' && phoneNumber.value) {
+    activeQuery.value = { searchBy: 'number', phoneNumber: phoneNumber.value }
+  } else {
+    return
+  }
+  execute()
+}
+
+onMounted(loadData)
 </script>
