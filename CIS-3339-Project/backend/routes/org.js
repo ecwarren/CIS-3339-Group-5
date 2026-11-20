@@ -1,22 +1,20 @@
 // This file contains API endpoints for interacting with "org" collection in MongoDB database
 const express = require('express');
 const router = express.Router();
-require('dotenv').config();
 
-// importing data model schemas
 const { orgs } = require('../models/models');
+const { asyncHandler, httpError } = require('../utils/http');
 
-// API endpoint to get org - will use the environment variable as a "configuration" for the organization of the backend instance
-router.get('/', (req, res, next) => {
-  orgs.findOne({ _id: process.env.ORG_ID }, (error, data) => {
-    if (error) {
-      return next(error);
-    } else if (!data) {
-      res.status(400).send('Organization not found');
-    } else {
-      res.json(data.name);
-    }
-  });
-});
+// Public: returns the display name of the organization this backend instance is configured for (ORG_ID).
+// The frontend shows it in the header before anyone logs in, so it does not require a token
+// and it only ever returns the name.
+router.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const org = await orgs.findById(process.env.ORG_ID).lean();
+    if (!org) throw httpError(404, 'Organization not found');
+    res.json(org.name);
+  })
+);
 
 module.exports = router;

@@ -1,25 +1,49 @@
-// Authroization middleware. It is used to check if API calls have a valid authorization token. This is to protect API endpoints against unauthorized calls.
+// S1: authentication and authorization middleware.
+//
+//   requireAuth          -> 401 unless the request has a valid JWT
+//   requireRole('editor') -> 403 unless the logged-in user has that role
+//
+// Usage in a route file:
+//   router.get('/', requireAuth, handler)                          // read
+//   router.post('/', requireAuth, requireRole('editor'), handler)  // create/update/delete
 
-// import Node.js module for verifying JWTs (JSON Web Tokens)
 const jwt = require('jsonwebtoken');
 
-module.exports = function (req, res, next) {
-  // Read the header of API calls called "Authorization", then split the token from that header
-  const token =
-    req.header('Authorization') && req.header('Authorization').split(' ')[1];
+function requireAuth(req, res, next) {
+  const header = req.header('Authorization') || '';
+  const [scheme, token] = header.split(' ');
 
-  // if there is no "Authorization" header, or no token in that header, then authorization is denied and no API call is made
-  if (!token) {
-    return res.status(401).json({ message: 'No token, authorization denied' });
+  if (scheme !== 'Bearer' || !token) {
+    return res.status(401).json({ error: 'Authentication required' });
   }
 
-  // if there is an "Authorization" header and the token is valid, then the token will be verified and decoded to contain the user's information, such as their username and role. The API call will then proceed.
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-    // if the token is not valid, then the API call will not be made.
+    // tokens issued before Sprint 3 have no orgId -> make the user log in again
+    if (!decoded.orgId) {
+      return res.status(401).json({ error: 'Session is no longer valid. Please log in again.' });
+    }
+    req.user = decoded; // { id, name, role, orgId }
+    return next();
   } catch (err) {
-    res.status(401).json({ message: 'Token is not valid' });
+    return res.status(401).json({ error: 'Session is invalid or has expired. Please log in again.' });
   }
-};
+}
+
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    if (req.user.role !== role) {
+      return res.status(403).json({ error: 'You do not have permission to do that.' });
+    }
+    return next();
+  };
+}
+
+// requireAuth is also the default export, so older code that does
+// `const authMiddleWare = require('../auth/authMiddleWare')` keeps working.
+module.exports = requireAuth;
+module.exports.requireAuth = requireAuth;
+module.exports.requireRole = requireRole;
