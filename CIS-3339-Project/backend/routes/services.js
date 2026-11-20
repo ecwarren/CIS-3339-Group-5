@@ -1,126 +1,106 @@
-// This file contains API endpoints for interacting with the "services" collection of the MongoDB database
+// This file contains API endpoints for the "services" collection of the MongoDB database
+//
+// Security pattern used on every route (S1):
+//   reads   -> requireAuth
+//   changes -> requireAuth + requireRole('editor')
+//   queries -> withOrg(...)   (services store their organization in `org`)
 const express = require('express');
 const router = express.Router();
 
-// import services schema
+const { requireAuth, requireRole } = require('../auth/authMiddleWare');
+const withOrg = require('../utils/withOrg');
+const { asyncHandler, httpError, escapeRegex, stripProtectedFields } = require('../utils/http');
 const { services, events } = require('../models/models');
 
-// Middleware for authorization. For API calls that require authorization, this middleware checks if the header of API calls have a valid security token. If no security token or invalid security token, then the API call is not made.
-const authMiddleWare = require('../auth/authMiddleWare');
+const editorOnly = [requireAuth, requireRole('editor')];
 
-// org id from environment
-const org = process.env.ORG_ID;
+//GET all services for the user's organization
+router.get(
+  '/',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const data = await services.find(withOrg({}, req)).sort({ name: 1 });
+    res.json(data);
+  })
+);
 
-// API endpoint to all services for org
-router.get('/', authMiddleWare, (req, res, next) => {
-  services
-    .find({ org: org }, (error, data) => {
-      if (error) {
-        return next(error);
-      } else {
-        res.json(data);
-      }
-    })
-    .sort({ updatedAt: -1 });
-});
+// GET single service by ID
+router.get(
+  '/id/:id',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const data = await services.findOne(withOrg({ _id: req.params.id }, req));
+    if (!data) throw httpError(404, 'Service not found');
+    res.json(data);
+  })
+);
 
-// API endpoint to GET single service by ID
-router.get('/id/:id', authMiddleWare, (req, res, next) => {
-  services.findOne({ _id: req.params.id, org: org }, (error, data) => {
-    if (error) {
-      return next(error);
-    } else if (!data) {
-      res.status(400).send('Service not found');
-    } else {
-      res.json(data);
+// GET services based on a search query
+router.get(
+  '/search',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const filter = {};
+    switch (req.query.searchBy) {
+      case 'name':
+        filter.name = { $regex: escapeRegex(req.query.name), $options: 'i' };
+        break;
+      case 'description':
+        filter.description = { $regex: escapeRegex(req.query.description), $options: 'i' };
+        break;
+      default:
+        throw httpError(400, 'searchBy must be "name" or "description"');
     }
-  });
-});
+    const data = await services.find(withOrg(filter, req));
+    res.json(data);
+  })
+);
 
-// API endpoint to GET entries based on search query
-router.get('/search', authMiddleWare, (req, res, next) => {
-  const dbQuery = { org: org };
-  switch (req.query.searchBy) {
-    case 'name':
-      dbQuery.name = { $regex: `${req.query.name}`, $options: "i" };
-      break;
-    case 'description':
-      dbQuery.description = {
-        $regex: `${req.query.description}`,
-        $options: "i",
-      };
-      break;
-    default:
-      return res.status(400).send('invalid searchBy');
-  }
-  services.find(dbQuery, (error, data) => {
-    if (error) {
-      return next(error);
-    } else {
-      res.json(data);
+// POST new service
+router.post(
+  '/',
+  ...editorOnly,
+  asyncHandler(async (req, res) => {
+    const newService = stripProtectedFields(req.body);
+    newService.org = req.user.orgId; // ownership comes from the token
+    if (!newService.status) newService.status = 'Active';
+    const created = await services.create(newService);
+    res.status(201).json({ message: 'New service created successfully', service: created });
+  })
+);
+
+// PUT update service
+router.put(
+  '/update/:id',
+  ...editorOnly,
+  asyncHandler(async (req, res) => {
+    const updated = await services.findOneAndUpdate(
+      withOrg({ _id: req.params.id }, req),
+      stripProtectedFields(req.body),
+      { new: true, runValidators: true }
+    );
+    if (!updated) throw httpError(404, 'Service not found');
+    res.json({ message: 'Service updated successfully', service: updated });
+  })
+);
+
+//DELETE service by ID - only allowed if no events use the service
+router.delete(
+  '/:id',
+  ...editorOnly,
+  asyncHandler(async (req, res) => {
+    const service = await services.findOne(withOrg({ _id: req.params.id }, req));
+    if (!service) throw httpError(404, 'Service not found');
+
+    const inUse = await events.countDocuments(withOrg({ services: service._id }, req));
+    if (inUse > 0) {
+      throw httpError(409, 'Service can not be deleted since it is being used by events.');
     }
-  });
-});
 
-// API endpoint to POST new service
-router.post('/', authMiddleWare, (req, res, next) => {
-  const newService = req.body;
-  newService.org = [org];
-  services.create(newService, (error, data) => {
-    if (error) {
-      return next(error);
-    } else {
-      return res.status(200).send('New service created successfully');
-    }
-  });
-});
-
-// API endpoint to PUT -> update service
-router.put('/update/:id', authMiddleWare, (req, res, next) => {
-  services.findByIdAndUpdate(req.params.id, req.body, (error, data) => {
-    if (error) {
-      return next(error);
-    } else {
-      if (!data)
-        res.status(400).send("Service not found.")
-      else
-        res.status(201).send('Service updated successfully');
-    }
-  });
-});
-
-// API endpoint to hard DELETE event by ID
-router.delete('/:id', authMiddleWare, async (req, res, next) => {
-  // only delete service if no events are using that service
-  const serviceEvents = await events.find({ services: req.params.id, org: org })
-
-  if (serviceEvents.length !== 0) {
-    res
-        .status(400)
-        .send('Service can not be deleted since it is being used by events.');
-    return;
-  }
-
-  services.findOne({ _id: req.params.id, org: org }, (error, data) => {
-    if (error) {
-      return next(error);
-    } else if (!data) {
-      res.status(400).send('Service not found');
-    } else {
-      services.findOneAndDelete(
-        { _id: req.params.id, org: org },
-        (error, data) => {
-          if (error) {
-            return next(error);
-          } else if (!data) {
-            res.status(400).send('Service not found');
-          } else {
-            res.status(200).send('Service deleted successfully');
-          }
-        }
-      );
-    }
-  });
-});
+    await services.deleteOne(withOrg({ _id: service._id }, req));
+    res.json({ message: 'Service deleted successfully' });
+  })
+);
 
 module.exports = router;
+
