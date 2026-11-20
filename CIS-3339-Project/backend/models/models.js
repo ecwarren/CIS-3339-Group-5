@@ -26,7 +26,7 @@ const userDataSchema = new Schema(
   {
     _id: {
       type: mongoose.Schema.Types.ObjectId,
-      required: true
+      default: () => new mongoose.Types.ObjectId()
     },
     username: {
       type: String,
@@ -38,11 +38,13 @@ const userDataSchema = new Schema(
     },
     role: {
       type: String,
-      required: true
+      required: true,
+      enum: ['viewer', 'editor']
     },
     org: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'org'
+      ref: 'org',
+      required: true
     }
   },
   {
@@ -181,17 +183,29 @@ const serviceDataSchema = new Schema(
       type: String
     },
     status: {
-      type: String
+      type: String,
+      enum: ['Active', 'Inactive'],
+      default: 'Active'
     },
     org: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'org'
+      ref: 'org',
+      required: true
     }
   },
   {
     collection: 'services'
   }
 );
+
+// ---------- Indexes (D1) ----------
+// one username per organization (login looks users up by username + org)
+userDataSchema.index({ username: 1, org: 1 }, { unique: true });
+// every list/search query is scoped by organization
+clientDataSchema.index({ orgs: 1, lastName: 1, firstName: 1 });
+eventDataSchema.index({ org: 1, date: -1 });
+eventDataSchema.index({ org: 1, attendees: 1 });
+serviceDataSchema.index({ org: 1, name: 1 });
 
 // create models from mongoose schemas
 const clients = mongoose.model('clients', clientDataSchema);
